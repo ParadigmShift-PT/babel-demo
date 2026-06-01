@@ -47,10 +47,11 @@ give each node a distinct port:
 
 ```bash
 java -jar babel-demo.jar nick=alice babel.port=6001
-java -jar babel-demo.jar nick=bob   babel.port=6002 contact=127.0.0.1:6001
+java -jar babel-demo.jar nick=bob   babel.port=6002 membership.contact=127.0.0.1:6001
 ```
 
-Type a line to talk to everyone; `/help` lists the commands.
+Omit `nick=` and you'll simply be asked for a nickname at startup. Type a line to
+talk to everyone; `/help` lists the commands.
 
 ---
 
@@ -94,16 +95,16 @@ decoupling is the heart of Babel, and the reason these pieces compose cleanly.
  │   • global message  → BroadcastRequest → FloodBroadcast       │
  │   • private message → sendMessage() directly to a peer        │
  │   • roster (Host → nickname) from a HELLO presence handshake  │
- │   • reacts to NeighbourUp/Down and DeliverNotification        │
+ │   • reacts to NeighborUp/Down and BroadcastDelivery           │
  └───┬───────────────────────────────┬───────────────────────────┘
-     │ BroadcastRequest               │ DeliverNotification
+     │ BroadcastRequest               │ BroadcastDelivery
      ▼                                ▲
  ┌─────────────────────────────┐      │
  │  FloodBroadcast (id 200)    │──────┘   floods a message to every neighbour,
  │   • deliver once, forward   │          delivering it once to the app
  │     to all other neighbours │
  └───┬─────────────────────────┘
-     │ NeighbourUp / NeighbourDown / ChannelCreated (notifications)
+     │ NeighborUp / NeighborDown / ChannelAvailable (notifications)
      ▼
  ┌─────────────────────────────────────────────────────────────┐
  │  GossipBasedFullMembership (id 100)                          │
@@ -118,7 +119,12 @@ decoupling is the heart of Babel, and the reason these pieces compose cleanly.
 Babel's `DiscoverableProtocol`: nodes announce themselves by multicast and the
 runtime introduces them, so no node needs a hard-coded address. Once connected,
 periodic gossip ensures everyone learns about everyone (a *full* membership). It
-emits `NeighbourUp` / `NeighbourDown` as peers come and go.
+emits the shared `NeighborUp` / `NeighborDown` notifications as peers come and go.
+
+The cross-protocol events (`BroadcastRequest`, `BroadcastDelivery`, `NeighborUp`,
+`NeighborDown`, `ChannelAvailableNotification`) are the reusable abstractions from
+the `babel-protocols-common` library — the same ones the production ParadigmShift
+protocols use — not types invented here.
 
 **Broadcast** is a flood: the first time you receive a message you deliver it
 locally and forward it to every neighbour except the one you got it from
@@ -131,7 +137,7 @@ ride the broadcast; private messages and the presence handshake go point-to-poin
 (possible because full membership makes every user directly reachable). It keeps
 a `Host → nickname` roster: when a neighbour appears it exchanges a `HELLO`
 (carrying the nickname), and it drops people on `/quit` (a broadcast `LEAVE`) or
-disconnect (`NeighbourDown`).
+disconnect (`NeighborDown`).
 
 ---
 
@@ -142,13 +148,15 @@ arguments (arguments win).
 
 | Key | Default | Meaning |
 |---|---|---|
-| `nick` | *(required)* | your chat nickname |
+| `nick` | *(prompted)* | your chat nickname; if omitted, you're asked for one at startup (must be passed when there's no interactive terminal) |
 | `babel.port` | `6000` | TCP port for this node — use a distinct one per node on a machine |
-| `interface` | *(unset)* | network interface (e.g. `en0`, `eth0`) to bind/announce on; needed so LAN discovery advertises a reachable address |
-| `contact` | `none` | bootstrap: `none` = first node · `host:port` = seed from that node · *(absent)* = wait for discovery |
-| `protocol.membership.sampletime` | `2000` | ms between gossip samples |
-| `protocol.membership.samplesize` | `6` | max peers per gossip sample |
-| `protocol_metrics_interval` | `-1` | if `>0`, periodically log the membership view (ms) |
+| `babel.interface` | *(unset)* | network interface (e.g. `en0`, `eth0`) to bind/announce on; needed so LAN discovery advertises a reachable address |
+| `membership.contact` | `none` | bootstrap: `none` = first node · `host:port` = seed from that node · *(absent)* = wait for discovery |
+| `membership.sampletime` | `2000` | ms between gossip samples |
+| `membership.samplesize` | `6` | max peers per gossip sample |
+| `membership.metrics.interval` | `-1` | if `>0`, periodically log the membership view (ms) |
+
+Naming: process-wide bind parameters are namespaced `babel.*`; a protocol's own parameters are namespaced by the protocol (here, `membership.*`). The launcher's `nick` is the one bare, user-facing parameter.
 
 ---
 
@@ -169,14 +177,14 @@ running the chat needs to be on the network with the other nodes.
 
 ## Running across machines & the contact fallback
 
-- **Same LAN (recommended):** just run each node with a `nick` (and an
-  `interface=` if a node has several). Multicast discovery connects them.
+- **Same LAN (recommended):** just run each node with a `nick` (and a
+  `babel.interface=` if a node has several). Multicast discovery connects them.
 - **Same machine:** multicast may not loop back between local JVMs — give each
   node a distinct `babel.port` and point later nodes at the first with
-  `contact=127.0.0.1:<first-port>`.
+  `membership.contact=127.0.0.1:<first-port>`.
 - **Segmented networks / VPN / cloud:** where multicast is blocked, start one
-  node as `contact=none` and seed the others with
-  `contact=<that-node-host>:<port>`. Discovery and the contact fallback can be
+  node as `membership.contact=none` and seed the others with
+  `membership.contact=<that-node-host>:<port>`. Discovery and the contact fallback can be
   used together.
 
 ---
@@ -189,13 +197,11 @@ src/main/java/
 ├── utils/InterfaceToIp.java                        resolve an interface name → IP
 ├── protocols/membership/
 │   ├── full/GossipBasedFullMembership.java         membership (extends DiscoverableProtocol)
-│   ├── full/messages/SampleMessage.java            gossip sample
-│   ├── full/timers/{SampleTimer,InfoTimer}.java
-│   └── common/notifications/{NeighbourUp,NeighbourDown,ChannelCreated}.java
+│   ├── full/messages/MembershipSampleMessage.java            gossip sample
+│   └── full/timers/{SampleTimer,InfoTimer}.java
 ├── protocols/broadcast/
 │   ├── flood/FloodBroadcast.java                   neighbour-aware flood
-│   ├── flood/messages/BroadcastMessage.java
-│   └── common/{BroadcastRequest,DeliverNotification}.java
+│   └── flood/messages/BroadcastMessage.java        its own wire message
 └── protocols/apps/chat/
     ├── ChatApp.java                                the interactive chat
     ├── messages/ChatDirectMessage.java             HELLO / private message
@@ -218,8 +224,8 @@ Logs go to a **file**, not the console, so they never disturb the chat UI. Each
 node writes `babel-demo-<port>.log`. Watch one with `tail -f babel-demo-6001.log`
 to see membership converge and messages flow.
 
-- **Nodes don't find each other on a LAN:** pass `interface=<your-nic>` so the
-  announced address is reachable, or use the `contact=` fallback.
+- **Nodes don't find each other on a LAN:** pass `babel.interface=<your-nic>` so the
+  announced address is reachable, or use the `membership.contact=` fallback.
 - **Two local nodes:** they must use different `babel.port` values.
 
 ---

@@ -7,7 +7,6 @@ import java.util.Date;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
-import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 import org.apache.logging.log4j.LogManager;
@@ -15,29 +14,30 @@ import org.apache.logging.log4j.Logger;
 
 import protocols.apps.chat.messages.ChatDirectMessage;
 import protocols.apps.chat.ui.Console;
-import protocols.broadcast.common.BroadcastRequest;
-import protocols.broadcast.common.DeliverNotification;
-import protocols.membership.common.notifications.ChannelCreated;
-import protocols.membership.common.notifications.NeighbourDown;
-import protocols.membership.common.notifications.NeighbourUp;
 import pt.unl.fct.di.novasys.babel.core.GenericProtocol;
 import pt.unl.fct.di.novasys.babel.exceptions.HandlerRegistrationException;
 import pt.unl.fct.di.novasys.babel.generic.ProtoMessage;
+import pt.unl.fct.di.novasys.babel.protocols.dissemination.notifications.BroadcastDelivery;
+import pt.unl.fct.di.novasys.babel.protocols.dissemination.requests.BroadcastRequest;
+import pt.unl.fct.di.novasys.babel.protocols.general.notifications.ChannelAvailableNotification;
+import pt.unl.fct.di.novasys.babel.protocols.membership.notifications.NeighborDown;
+import pt.unl.fct.di.novasys.babel.protocols.membership.notifications.NeighborUp;
 import pt.unl.fct.di.novasys.network.data.Host;
 
 /**
  * The chat application — the top of the stack, and the only protocol a user sees.
  * It ties the lower layers together:
  * <ul>
- *   <li><b>Global messages</b> go out via the {@link BroadcastRequest} to the
+ *   <li><b>Global messages</b> go out via a {@link BroadcastRequest} to the
  *       broadcast protocol, and come back (to everyone, including us) as
- *       {@link DeliverNotification}s.</li>
+ *       {@link BroadcastDelivery} notifications. Both are the shared
+ *       {@code babel-protocols-common} dissemination types.</li>
  *   <li><b>Private messages</b> ({@code /msg}) are sent point-to-point with
  *       {@code sendMessage} over the membership's shared channel.</li>
  *   <li><b>Presence</b> — who's in the chat — is a {@code Host → nickname} roster.
- *       When the membership reports a {@link NeighbourUp}, we send that peer a
+ *       When the membership reports a {@link NeighborUp}, we send that peer a
  *       direct {@link ChatDirectMessage.Kind#HELLO} carrying our nickname; the
- *       peer does the same, so both learn each other. {@link NeighbourDown} (a
+ *       peer does the same, so both learn each other. {@link NeighborDown} (a
  *       crash) and a broadcast {@code LEAVE} (a graceful {@code /quit}) remove
  *       people again.</li>
  * </ul>
@@ -78,10 +78,10 @@ public class ChatApp extends GenericProtocol {
         this.console = new Console("[" + nick + "] ");
 
         // Global deliveries + membership changes + the shared channel.
-        subscribeNotification(DeliverNotification.NOTIFICATION_ID, this::uponDeliver);
-        subscribeNotification(NeighbourUp.NOTIFICATION_ID, this::uponNeighbourUp);
-        subscribeNotification(NeighbourDown.NOTIFICATION_ID, this::uponNeighbourDown);
-        subscribeNotification(ChannelCreated.NOTIFICATION_ID, this::uponChannelCreated);
+        subscribeNotification(BroadcastDelivery.NOTIFICATION_ID, this::uponDeliver);
+        subscribeNotification(NeighborUp.NOTIFICATION_ID, this::uponNeighborUp);
+        subscribeNotification(NeighborDown.NOTIFICATION_ID, this::uponNeighborDown);
+        subscribeNotification(ChannelAvailableNotification.NOTIFICATION_ID, this::uponChannelAvailable);
         // Direct-message handler is registered once we have the shared channel.
     }
 
@@ -94,8 +94,8 @@ public class ChatApp extends GenericProtocol {
 
     /* ─────────── Attach our direct-message handler to the shared channel ─────────── */
 
-    private void uponChannelCreated(ChannelCreated notification, short sourceProto) {
-        this.channelId = notification.getChannelId();
+    private void uponChannelAvailable(ChannelAvailableNotification notification, short sourceProto) {
+        this.channelId = notification.getChannelID();
         registerSharedChannel(channelId);
         registerMessageSerializer(channelId, ChatDirectMessage.MSG_ID, ChatDirectMessage.serializer);
         try {
@@ -113,38 +113,36 @@ public class ChatApp extends GenericProtocol {
 
     /* ───────────────────────── Membership notifications ───────────────────────── */
 
-    private void uponNeighbourUp(NeighbourUp notification, short sourceProto) {
-        for (Host h : notification.getNeighbours()) {
-            if (!neighbours.contains(h)) {
-                neighbours.add(h);
-            }
-            // Presence handshake: tell the new neighbour who we are.
-            if (channelReady) {
-                sendHello(h);
-            }
+    private void uponNeighborUp(NeighborUp notification, short sourceProto) {
+        Host h = notification.getPeer();
+        if (!neighbours.contains(h)) {
+            neighbours.add(h);
+        }
+        // Presence handshake: tell the new neighbour who we are.
+        if (channelReady) {
+            sendHello(h);
         }
     }
 
-    private void uponNeighbourDown(NeighbourDown notification, short sourceProto) {
-        for (Host h : notification.getNeighbours()) {
-            neighbours.remove(h);
-            String goneNick = roster.remove(h); // null if we never knew them / already removed
-            if (goneNick != null) {
-                console.printAbove("*** " + goneNick + " has left the chat");
-            }
+    private void uponNeighborDown(NeighborDown notification, short sourceProto) {
+        Host h = notification.getPeer();
+        neighbours.remove(h);
+        String goneNick = roster.remove(h); // null if we never knew them / already removed
+        if (goneNick != null) {
+            console.printAbove("*** " + goneNick + " has left the chat");
         }
     }
 
     /* ─────────────────────── Global deliveries (broadcast) ─────────────────────── */
 
-    private void uponDeliver(DeliverNotification notification, short sourceProto) {
-        ChatPayload payload = ChatPayload.decode(notification.getMsg());
+    private void uponDeliver(BroadcastDelivery notification, short sourceProto) {
+        ChatPayload payload = ChatPayload.decode(notification.getPayload());
         Host sender = notification.getSender();
         switch (payload.getKind()) {
             case TEXT -> console.printAbove(ts() + " <" + payload.getNick() + "> " + payload.getText());
             case LEAVE -> {
                 if (!sender.equals(myself)) {
-                    // Print only if we actually had them (dedups with NeighbourDown).
+                    // Print only if we actually had them (dedups with NeighborDown).
                     if (roster.remove(sender) != null) {
                         console.printAbove("*** " + payload.getNick() + " has left the chat");
                     }
@@ -222,17 +220,25 @@ public class ChatApp extends GenericProtocol {
     }
 
     /* ──────────────────────────────── Senders ──────────────────────────────────── */
+    // Two distinct Babel send primitives are used here:
+    //  • sendRequest(req, protoId) — hand a request to ANOTHER protocol in this
+    //    process (the broadcast). That protocol then puts it on the network.
+    //  • sendMessage(msg, host)    — send a message straight to ONE peer over the
+    //    shared channel (point-to-point). Used for HELLO and private /msg.
 
+    // Global channel: encode the text and ask the broadcast protocol to flood it.
     private void broadcastText(String text) {
         byte[] payload = new ChatPayload(ChatPayload.Kind.TEXT, nick, text).encode();
-        sendRequest(new BroadcastRequest(UUID.randomUUID(), myself, payload), broadcastProtoId);
+        sendRequest(new BroadcastRequest(myself, payload, PROTO_ID), broadcastProtoId);
     }
 
+    // Graceful departure: broadcast a LEAVE so everyone drops us from their roster.
     private void broadcastLeave() {
         byte[] payload = new ChatPayload(ChatPayload.Kind.LEAVE, nick, "").encode();
-        sendRequest(new BroadcastRequest(UUID.randomUUID(), myself, payload), broadcastProtoId);
+        sendRequest(new BroadcastRequest(myself, payload, PROTO_ID), broadcastProtoId);
     }
 
+    // Presence handshake: send our nickname directly to one peer (point-to-point).
     private void sendHello(Host peer) {
         sendMessage(new ChatDirectMessage(ChatDirectMessage.Kind.HELLO, nick, ""), peer);
     }

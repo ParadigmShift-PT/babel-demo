@@ -90,6 +90,24 @@
                 <version>3.12.1</version>
             </plugin>
 
+            <!-- Javadoc generation. Pinned + doclint disabled so a stray/missing
+                 tag can't fail the build. Run by CI (`mvn javadoc:javadoc`, output
+                 in target/site/apidocs) and published to GitHub Pages — see
+                 .github/workflows/ci.yml. No attach execution: the demo isn't a
+                 Maven artifact, so we don't bundle a -javadoc.jar at package time. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-javadoc-plugin</artifactId>
+                <version>3.6.3</version>
+                <configuration>
+                    <doclint>none</doclint>
+                    <quiet>true</quiet>
+                    <windowtitle>babel-demo API</windowtitle>
+                    <doctitle>babel-demo ${project.version} API</doctitle>
+                    <bottom>Copyright &amp;copy; 2026 ParadigmShift, Lda. See LICENSE for terms.</bottom>
+                </configuration>
+            </plugin>
+
             <!-- Builds the runnable fat JAR (target/babel-demo.jar, main class
                  Main) — same approach as babel-example's DistAlg. This shaded
                  artifact is the distributable output (attached to GitHub Releases),

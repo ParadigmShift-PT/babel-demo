@@ -1,13 +1,19 @@
 name: CI
 
-# babel-demo is a runnable demo application, NOT a published library. CI builds
-# the executable fat JAR and, on a version tag, publishes it as a GitHub Release.
+# babel-demo is a runnable demo application, NOT a published library. CI:
+#   • builds the executable fat JAR (every push/PR);
+#   • on a version tag, publishes the JAR as a GitHub Release;
+#   • on main, publishes the generated Javadoc to GitHub Pages
+#     (https://paradigmshift-pt.github.io/babel-demo/).
 #
 # DO NOT add an `mvn deploy` step or any `mvn install` step to this workflow.
 # Publishing this repository to the ParadigmShift Maven repository would make it
 # appear in the libraries section of the website alongside the real reusable
 # artifacts — which is explicitly NOT what this demo is. Distribution is the fat
-# JAR attached to the GitHub Release created below.
+# JAR attached to the GitHub Release; the API docs live on GitHub Pages.
+#
+# One-time setup for Pages: repo Settings → Pages → Build and deployment →
+# Source: "GitHub Actions". (Requires a public repo, or a paid plan for private.)
 
 on:
   push:
@@ -48,3 +54,39 @@ jobs:
           files: target/babel-demo.jar
           fail_on_unmatched_files: true
           generate_release_notes: true
+
+  # Publish the Javadoc to GitHub Pages → https://paradigmshift-pt.github.io/babel-demo/
+  docs:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write        # to deploy to Pages
+      id-token: write     # for the Pages OIDC token
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    # Serialise Pages deploys; don't cancel an in-flight one.
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Generate Javadoc
+        run: mvn --no-transfer-progress javadoc:javadoc   # → target/site/apidocs
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: target/site/apidocs
+
+      - id: deployment
+        uses: actions/deploy-pages@v4
