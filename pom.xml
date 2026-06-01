@@ -6,7 +6,7 @@
 
     <groupId>pt.paradigmshift.babel</groupId>
     <artifactId>babel-demo</artifactId>
-    <version>0.1.0</version>
+    <version>0.1.1</version>
     <name>ParadigmShift Babel Demo — P2P Chat</name>
 
     <description>
