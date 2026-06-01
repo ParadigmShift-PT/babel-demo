@@ -78,6 +78,18 @@
             <artifactId>jline</artifactId>
             <version>${jline.version}</version>
         </dependency>
+
+        <!-- SLF4J→Log4j2 bridge. A transitive dep (slf4j-api 1.7.x, via
+             babel-protocols-common) logs through SLF4J; with no binding present
+             SLF4J prints the "Failed to load StaticLoggerBinder / NOP logger"
+             warnings to the console at startup. This bridge supplies the binding so
+             those logs flow into our Log4j2 file appender (log4j2.xml) instead — no
+             console noise. Version tracks log4j-core (2.23.1, brought by babel). -->
+        <dependency>
+            <groupId>org.apache.logging.log4j</groupId>
+            <artifactId>log4j-slf4j-impl</artifactId>
+            <version>2.23.1</version>
+        </dependency>
     </dependencies>
 
     <build>

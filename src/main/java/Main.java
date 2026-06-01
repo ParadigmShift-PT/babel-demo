@@ -1,4 +1,5 @@
 import java.net.InetAddress;
+import java.net.NetworkInterface;
 import java.security.InvalidParameterException;
 import java.util.Properties;
 
@@ -9,6 +10,7 @@ import protocols.apps.chat.ChatApp;
 import protocols.broadcast.flood.FloodBroadcast;
 import protocols.membership.full.GossipBasedFullMembership;
 import pt.unl.fct.di.novasys.babel.core.Babel;
+import pt.unl.fct.di.novasys.babel.core.protocols.discovery.MulticastDiscoveryProtocol;
 import pt.unl.fct.di.novasys.channel.tcp.TCPChannel;
 import pt.unl.fct.di.novasys.network.data.Host;
 import utils.InterfaceToIp;
@@ -115,12 +117,14 @@ public class Main {
         // first non-loopback interface. We never default to loopback silently —
         // discovery and peers need a reachable address. If nothing qualifies, tell
         // the operator to pass babel.interface or babel.address and exit cleanly.
+        String addressSource;
         try {
-            InterfaceToIp.resolveBindAddress(props);
+            addressSource = InterfaceToIp.resolveBindAddress(props);
         } catch (InvalidParameterException e) {
             System.err.println("babel-demo — cannot determine a bind address.\n");
             System.err.println(e.getMessage());
             System.exit(1);
+            return; // unreachable; keeps the compiler happy about addressSource
         }
 
         // Work out our own address/port. A Host is an (address, port) pair that
@@ -130,6 +134,13 @@ public class Main {
         Host myself = new Host(InetAddress.getByName(bindAddress), bindPort);
 
         logger.info("babel-demo starting — nick='{}', host={}", nick, myself);
+        // Full interface inventory goes to the log file — handy when the auto-detected
+        // interface turns out to be the wrong one.
+        logger.info(InterfaceToIp.describeInterfaces());
+
+        // Print a one-screen summary (to stdout, before the chat console takes over)
+        // so it's obvious which interface/IP we bound and how we'll find peers.
+        printStartupBanner(props, nick, myself, addressSource);
 
         // Build the three protocols.
         GossipBasedFullMembership membership = new GossipBasedFullMembership(TCPChannel.NAME, props, myself);
@@ -137,9 +148,13 @@ public class Main {
         ChatApp chat = new ChatApp(props, myself, nick, FloodBroadcast.PROTOCOL_ID);
 
         // Register every protocol, then init each (the chat's init starts the
-        // console), then start the runtime. Babel automatically drives multicast
-        // discovery for the DiscoverableProtocol membership and calls its start()
-        // once it has a contact (or is the first node).
+        // console), then start the runtime. Because babel.discovery is set (see
+        // babel_config.properties), Babel loads the multicast discovery protocol and
+        // wires it to our DiscoverableProtocol membership. When membership.contact is
+        // absent (needsDiscovery()==true) the node actively probes the LAN and Babel
+        // calls its start() once a peer is found. membership.contact=none makes it a
+        // first node: it does NOT probe, but it still replies to others' probes (so
+        // joiners can discover it) — i.e. start at least one node without 'none'.
         babel.registerProtocol(membership);
         babel.registerProtocol(broadcast);
         babel.registerProtocol(chat);
@@ -152,6 +167,60 @@ public class Main {
         // No more stdout from here — the chat console owns the terminal now.
         logger.info("babel-demo up as '{}' ({})", nick, myself);
         Runtime.getRuntime().addShutdownHook(new Thread(() -> logger.info("babel-demo shutting down")));
+    }
+
+    /**
+     * Print a concise startup summary to stdout (before the chat console takes
+     * over): the nickname, the address/port we bound and how it was chosen, the
+     * discovery configuration, and how we'll bootstrap. This makes it obvious — at
+     * a glance — which interface/IP a node is using and whether auto-discovery is
+     * actually engaged (the common "why don't they find each other?" confusion is a
+     * node in {@code membership.contact=none} mode, which opts out of discovery).
+     */
+    private static void printStartupBanner(Properties props, String nick, Host myself, String addressSource) {
+        // Resolve the actual interface the bound address sits on, so the operator can
+        // see — and sanity-check — exactly which NIC this process is using. (A wrong
+        // auto-selection is the usual reason two nodes never find each other.)
+        String iface;
+        try {
+            NetworkInterface nif = NetworkInterface.getByInetAddress(myself.getAddress());
+            iface = (nif != null) ? nif.getName() : "?";
+        } catch (Exception e) {
+            iface = "?";
+        }
+
+        StringBuilder b = new StringBuilder(System.lineSeparator());
+        b.append("  babel-demo — node '").append(nick).append('\'').append(System.lineSeparator());
+        b.append("  network     : ").append(iface).append("  →  ").append(myself.getAddress().getHostAddress())
+                .append("   (").append(addressSource).append(')').append(System.lineSeparator());
+        b.append("  listen      : ").append(myself.getAddress().getHostAddress())
+                .append(':').append(myself.getPort()).append("  (TCP chat)").append(System.lineSeparator());
+
+        if (props.getProperty(Babel.PAR_DISCOVERY_PROTOCOL) != null) {
+            String group = props.getProperty(MulticastDiscoveryProtocol.PAR_DISCOVERY_MULTICAST_ADDRESS,
+                    MulticastDiscoveryProtocol.MULTICAST_ADDRESS);
+            String mport = props.getProperty(MulticastDiscoveryProtocol.PAR_DISCOVERY_MULTICAST_PORT,
+                    Integer.toString(MulticastDiscoveryProtocol.DEFAULT_MULTICAST_PORT));
+            String uport = props.getProperty(MulticastDiscoveryProtocol.PAR_DISCOVERY_UNICAST_PORT,
+                    Integer.toString(MulticastDiscoveryProtocol.DEFAULT_UNICAST_PORT));
+            b.append("  discovery   : multicast ").append(group).append(':').append(mport)
+                    .append("  ·  unicast :").append(uport).append(System.lineSeparator());
+        } else {
+            b.append("  discovery   : disabled (no '").append(Babel.PAR_DISCOVERY_PROTOCOL).append("')")
+                    .append(System.lineSeparator());
+        }
+
+        String contact = props.getProperty(GossipBasedFullMembership.PAR_CONTACT);
+        String bootstrap;
+        if (contact == null || contact.isBlank()) {
+            bootstrap = "auto-discovery — I announce + probe the LAN and connect to whoever answers";
+        } else if (contact.trim().equalsIgnoreCase("none")) {
+            bootstrap = "first node (membership.contact=none) — I don't probe, but I reply to others' probes";
+        } else {
+            bootstrap = "seed from contact " + contact.trim();
+        }
+        b.append("  bootstrap   : ").append(bootstrap).append(System.lineSeparator());
+        System.out.println(b);
     }
 
     /**

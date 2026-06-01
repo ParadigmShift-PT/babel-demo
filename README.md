@@ -42,13 +42,26 @@ java -jar babel-demo.jar nick=alice
 java -jar babel-demo.jar nick=bob          # another terminal or machine
 ```
 
-On the same LAN they discover each other automatically (each node binds the
-auto-detected address of its first reachable interface). On the **same machine**,
-pin both to loopback with `babel.address=127.0.0.1` and give each a distinct port:
+On the same LAN they discover each other automatically. Each node picks its
+network interface automatically (see [Choosing the interface](#choosing-the-network-interface-experimental));
+if your machine has several real NICs it will ask you to pick one with
+`babel.interface=<nic>`.
+
+**Two nodes on the same machine** need a distinct `babel.port` *and* a distinct
+`babel.discovery.unicast.port` (the per-node discovery socket, default `1026`,
+can't be shared — see [Configuration](#configuration)):
 
 ```bash
-java -jar babel-demo.jar nick=alice babel.address=127.0.0.1 babel.port=6001
-java -jar babel-demo.jar nick=bob   babel.address=127.0.0.1 babel.port=6002 membership.contact=127.0.0.1:6001
+java -jar babel-demo.jar nick=alice babel.discovery.unicast.port=1026
+java -jar babel-demo.jar nick=bob   babel.port=6001 babel.discovery.unicast.port=1027
+```
+
+If two local nodes don't find each other (some OSes don't loop multicast back
+between local processes), pin both to loopback and seed the second from the first:
+
+```bash
+java -jar babel-demo.jar nick=alice babel.address=127.0.0.1 babel.discovery.unicast.port=1026 membership.contact=none
+java -jar babel-demo.jar nick=bob   babel.address=127.0.0.1 babel.port=6001 babel.discovery.unicast.port=1027 membership.contact=127.0.0.1:6000
 ```
 
 Omit `nick=` and you'll simply be asked for a nickname at startup. Type a line to
@@ -154,15 +167,43 @@ arguments (arguments win).
 |---|---|---|
 | `nick` | *(prompted)* | your chat nickname; if omitted, you're asked for one at startup (must be passed when there's no interactive terminal) |
 | `babel.port` | `6000` | TCP port for this node — use a distinct one per node on a machine |
-| `babel.interface` | *(unset)* | network interface (e.g. `en0`, `eth0`) to bind/announce on; if unset, the first reachable (non-loopback) interface is auto-detected |
+| `babel.interface` | *(unset)* | network interface (e.g. `en0`, `eth0`) to bind/announce on; if unset, it is auto-detected ([experimental](#choosing-the-network-interface-experimental)) |
 | `babel.address` | *(auto-detected)* | bind/announce IP; overrides interface auto-detection. Use `127.0.0.1` to run several nodes on one disconnected machine. There is **no** loopback default — if no interface can be auto-detected you must set this or `babel.interface` |
 | `babel.discovery` | `…discovery.MulticastDiscoveryProtocol` | discovery protocol class(es) (`;`-separated) enabling LAN auto-discovery; **required** for discovery to run at all — remove it and nodes connect only via `membership.contact` |
-| `membership.contact` | `none` | bootstrap: `none` = first node · `host:port` = seed from that node · *(absent)* = wait for discovery |
+| `babel.discovery.unicast.port` | `1026` | per-node UDP port for the discovery unicast socket; **give each node on one machine a distinct value** or the second fails with `BindException: Address already in use` |
+| `babel.discovery.multicast.port` | `1025` | shared multicast rendezvous port; keep it **identical** across nodes (it's reused safely per host) — varying it stops nodes from discovering each other |
+| `membership.contact` | *(unset)* | bootstrap mode: *(absent)* = **joiner**, probe the LAN for peers (and reply to others) · `none` = **first node**, don't probe but still reply to others' probes · `host:port` = seed directly from that node |
 | `membership.sampletime` | `2000` | ms between gossip samples |
 | `membership.samplesize` | `6` | max peers per gossip sample |
 | `membership.metrics.interval` | `-1` | if `>0`, periodically log the membership view (ms) |
 
 Naming: process-wide bind parameters are namespaced `babel.*`; a protocol's own parameters are namespaced by the protocol (here, `membership.*`). The launcher's `nick` is the one bare, user-facing parameter.
+
+### Choosing the network interface (experimental)
+
+A node must bind a **reachable** address — not loopback, and not a virtual/VM
+interface — so that the address it announces is one peers can actually connect to.
+On startup babel-demo prints exactly what it chose, e.g.:
+
+```
+  network     : en0  →  192.168.20.158   (auto-detected sole interface en0)
+  listen      : 192.168.20.158:6000  (TCP chat)
+```
+
+**Auto-detection is a best-effort heuristic — treat it as experimental.** With no
+`babel.interface` / `babel.address` set, the node looks for interfaces that are up,
+non-loopback, non-point-to-point, have a routable (non-link-local) IPv4, and whose
+name is *not* a known bridge / VM / container / VPN adapter (`bridge*`, `vmenet*`,
+`docker*`, `utun*`, …). Then:
+
+- **exactly one** such interface → it's selected automatically (the common laptop case);
+- **several** → it refuses to guess and lists them, so you pick one explicitly;
+- **none** (only bridges/VPNs, or nothing) → it asks you to name one.
+
+Because the bridge/VM exclusion is name-based, it can be wrong on unusual setups.
+**Whenever in doubt, set `babel.interface=<nic>` (or `babel.address=<ip>`) explicitly** —
+that always wins and skips the heuristic. The full interface inventory is written to
+the node's log file (`babel-demo-<port>.log`) to help diagnose a bad pick.
 
 ---
 
@@ -183,17 +224,21 @@ running the chat needs to be on the network with the other nodes.
 
 ## Running across machines & the contact fallback
 
-- **Same LAN (recommended):** just run each node with a `nick`. Each node
-  auto-detects a reachable interface; pass `babel.interface=` (or `babel.address=`)
-  only if a node has several and picks the wrong one. Multicast discovery connects them.
-- **Same machine:** multicast may not loop back between local JVMs — pin every
-  node to loopback with `babel.address=127.0.0.1`, give each a distinct
-  `babel.port`, and point later nodes at the first with
-  `membership.contact=127.0.0.1:<first-port>`.
-- **Segmented networks / VPN / cloud:** where multicast is blocked, start one
-  node as `membership.contact=none` and seed the others with
-  `membership.contact=<that-node-host>:<port>`. Discovery and the contact fallback can be
-  used together.
+By default every node is a **joiner**: it probes the LAN for peers and also replies
+to others' probes, so two joiners find each other with no contact configured at all.
+
+- **Same LAN (recommended):** just run each node with a `nick` (and
+  `babel.interface=<nic>` if [auto-detection](#choosing-the-network-interface-experimental)
+  can't decide). Multicast discovery connects them.
+- **Same machine:** give each node a distinct `babel.port` **and** a distinct
+  `babel.discovery.unicast.port` — the discovery unicast socket (default `1026`) is
+  per-process with no port reuse, so two local nodes clash on it otherwise (the
+  multicast rendezvous port `1025` is shared on purpose — leave it). If local
+  multicast doesn't loop back, use the contact fallback below.
+- **Segmented networks / VPN / cloud, or flaky local multicast:** where multicast is
+  unavailable, start one node as `membership.contact=none` (it won't probe but still
+  answers, and is reachable as a seed) and point the others at it with
+  `membership.contact=<that-node-host>:<port>`.
 
 ---
 
@@ -232,14 +277,26 @@ Logs go to a **file**, not the console, so they never disturb the chat UI. Each
 node writes `babel-demo-<port>.log`. Watch one with `tail -f babel-demo-6001.log`
 to see membership converge and messages flow.
 
-- **Nodes don't find each other on a LAN:** the auto-detected interface may be the
-  wrong one — pass `babel.interface=<your-nic>` (or `babel.address=<ip>`) so the
-  announced address is reachable, or use the `membership.contact=` fallback.
-- **"Could not auto-detect a reachable network interface":** the machine has no
-  non-loopback interface up (e.g. offline). Pass `babel.address=127.0.0.1` (or a
-  `babel.interface=`) explicitly.
-- **Two local nodes:** pin both to `babel.address=127.0.0.1` and use different
-  `babel.port` values.
+- **Check the startup banner first** — it prints the chosen interface/IP, the
+  discovery ports, and the bootstrap mode. Most discovery problems are visible there
+  (e.g. it bound a VM bridge address, or every node is a `none` first node so nobody
+  probes).
+- **Nodes don't find each other on a LAN:** the [auto-detected](#choosing-the-network-interface-experimental)
+  interface may be wrong (the banner shows it) — pass `babel.interface=<your-nic>`
+  (or `babel.address=<ip>`) so the announced address is reachable, or use the
+  `membership.contact=` fallback. Also make sure at least one node is a joiner
+  (`membership.contact` **absent**); if every node uses `none`, none of them probe.
+- **"Several … interfaces are usable — refusing to guess":** auto-detection found
+  more than one real NIC. Pass `babel.interface=<nic>` (the message lists them).
+- **"Could not auto-detect a reachable network interface" / "Only bridge / VM / VPN
+  interfaces":** no plain physical NIC was found (offline, or only virtual adapters).
+  Pass `babel.interface=<nic>` or `babel.address=<ip>` (e.g. `127.0.0.1`) explicitly.
+- **Two local nodes:** use different `babel.port` **and** `babel.discovery.unicast.port`
+  values (pin both to `babel.address=127.0.0.1` if you don't want them on the LAN).
+- **`BindException: Address already in use` at startup (in `Babel.start`):** another
+  discovery-enabled node on this machine already holds the discovery unicast port
+  (`1026`). Give this node a distinct `babel.discovery.unicast.port` (e.g. `1027`).
+  Leave `babel.discovery.multicast.port` alone — that one is meant to be shared.
 
 ---
 
@@ -248,7 +305,7 @@ to see membership converge and messages flow.
 This is a **runnable demo, not a library**, so it is *not* published to the
 ParadigmShift Maven repository. The CI (`.github/workflows/ci.yml`) builds the fat
 JAR on every push, and on a version tag (`vX.Y.Z`) attaches it to a **GitHub
-Release**. To cut a release: `git tag v0.1.0 && git push origin v0.1.0`.
+Release**. To cut a release: `git tag v0.1.1 && git push origin v0.1.1`.
 
 ---
 
