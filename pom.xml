@@ -1,0 +1,129 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>pt.paradigmshift.babel</groupId>
+    <artifactId>babel-demo</artifactId>
+    <version>0.1.0</version>
+    <name>ParadigmShift Babel Demo — P2P Chat</name>
+
+    <description>
+        A small, software-only tech demo for the Babel framework: a peer-to-peer,
+        mIRC-style group chat that auto-discovers peers on the LAN. It composes
+        three Babel protocols — gossip-based full membership (with auto-discovery
+        via DiscoverableProtocol), neighbour-aware flood broadcast, and an
+        interactive chat application — to show how to make nodes talk to each
+        other in Java. This is a runnable demo for learning, NOT a library: it is
+        intentionally not published to the ParadigmShift Maven repository (there
+        is no distributionManagement block on purpose; do not add one, and do not
+        add an `mvn deploy` step to .github/workflows/ci.yml). Distribution is the
+        executable fat JAR attached to a GitHub Release.
+    </description>
+    <url>https://www.paradigmshift.pt</url>
+
+    <licenses>
+        <license>
+            <name>ParadigmShift Proprietary License</name>
+            <url>https://www.paradigmshift.pt</url>
+            <distribution>repo</distribution>
+            <comments>
+                Non-commercial use is permitted; commercial use requires a written
+                licence from ParadigmShift, Lda. See the LICENSE file for full terms.
+            </comments>
+        </license>
+    </licenses>
+
+    <properties>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <maven.compiler.source>17</maven.compiler.source>
+        <maven.compiler.target>17</maven.compiler.target>
+        <jline.version>3.25.1</jline.version>
+    </properties>
+
+    <!-- babel-core resolves from the ParadigmShift Maven repository (read-open,
+         no credentials); JLine resolves from Maven Central. -->
+    <repositories>
+        <repository>
+            <id>paradigmshift-repository</id>
+            <name>ParadigmShift Repository</name>
+            <url>https://maven.paradigmshift.pt/releases</url>
+        </repository>
+    </repositories>
+
+    <dependencies>
+        <!-- The ParadigmShift fork of Babel-Swarm. Brings babel-network-layer
+             and the logging stack transitively. -->
+        <dependency>
+            <groupId>pt.paradigmshift.babel</groupId>
+            <artifactId>babel-core</artifactId>
+            <version>1.0.1</version>
+        </dependency>
+
+        <!-- Generic protocol abstractions and shared notifications. Provides
+             ChannelAvailableNotification (the discovery-runtime contract that
+             DiscoverableProtocol.start() fires). Same dependency HyParView uses. -->
+        <dependency>
+            <groupId>pt.paradigmshift.babel</groupId>
+            <artifactId>babel-protocols-common</artifactId>
+            <version>1.1.0</version>
+        </dependency>
+
+        <!-- JLine: the terminal UI for the chat console (input line that doesn't
+             interleave with incoming messages). The 'jline' uber-artifact bundles
+             terminal + reader. -->
+        <dependency>
+            <groupId>org.jline</groupId>
+            <artifactId>jline</artifactId>
+            <version>${jline.version}</version>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <sourceDirectory>src/main/java</sourceDirectory>
+
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.12.1</version>
+            </plugin>
+
+            <!-- Builds the runnable fat JAR (target/babel-demo.jar, main class
+                 Main) — same approach as babel-example's DistAlg. This shaded
+                 artifact is the distributable output (attached to GitHub Releases),
+                 NOT a Maven-deployed library. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-assembly-plugin</artifactId>
+                <version>3.7.1</version>
+                <configuration>
+                    <finalName>babel-demo</finalName>
+                    <appendAssemblyId>false</appendAssemblyId>
+                    <archive>
+                        <manifest>
+                            <mainClass>Main</mainClass>
+                        </manifest>
+                        <manifestEntries>
+                            <Multi-Release>true</Multi-Release>
+                        </manifestEntries>
+                    </archive>
+                    <descriptorRefs>
+                        <descriptorRef>jar-with-dependencies</descriptorRef>
+                    </descriptorRefs>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>assemble-all</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>single</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>

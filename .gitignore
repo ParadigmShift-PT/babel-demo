@@ -1,0 +1,27 @@
+# ─── Build output ───
+target/
+
+# ─── Logs ───
+*.log
+babel-demo-*.log
+
+# ─── IDE / editor project metadata ───
+.classpath
+.project
+.settings/
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.factorypath
+
+# ─── OS cruft ───
+.DS_Store
+._*
+Thumbs.db
+
+# ─── Internal docs (kept local, not published) ───
+# CLAUDE.md = Claude Code per-project guidance; PLAN.md = internal design/milestones.
+CLAUDE.md
+PLAN.md

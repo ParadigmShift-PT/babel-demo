@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Logs are written to a FILE (babel-demo.log), not the console, on purpose: the
+  chat uses JLine to own stdout, and console log lines would corrupt the terminal
+  UI. Tail the file in another window to watch the protocols work:
+      tail -f babel-demo.log
+-->
+<Configuration status="WARN">
+    <Appenders>
+        <File name="File" fileName="${sys:babeldemo.logfile:-babel-demo.log}" append="false">
+            <PatternLayout pattern="%d{HH:mm:ss.SSS} [%t] %-5level %logger{36} - %msg%n"/>
+        </File>
+    </Appenders>
+    <Loggers>
+        <!-- Our own code at INFO; the Babel/Netty internals kept quieter. -->
+        <Logger name="protocols" level="info"/>
+        <Logger name="pt.unl.fct.di.novasys" level="warn"/>
+        <Root level="info">
+            <AppenderRef ref="File"/>
+        </Root>
+    </Loggers>
+</Configuration>

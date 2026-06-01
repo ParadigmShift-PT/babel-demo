@@ -1,0 +1,50 @@
+name: CI
+
+# babel-demo is a runnable demo application, NOT a published library. CI builds
+# the executable fat JAR and, on a version tag, publishes it as a GitHub Release.
+#
+# DO NOT add an `mvn deploy` step or any `mvn install` step to this workflow.
+# Publishing this repository to the ParadigmShift Maven repository would make it
+# appear in the libraries section of the website alongside the real reusable
+# artifacts — which is explicitly NOT what this demo is. Distribution is the fat
+# JAR attached to the GitHub Release created below.
+
+on:
+  push:
+    branches: [ main ]
+    tags:     [ 'v*.*.*' ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # needed to create the Release on tag pushes
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Build executable fat JAR
+        run: mvn package --no-transfer-progress
+
+      - name: Upload demo JAR (workflow artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: babel-demo
+          path: target/babel-demo.jar
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: target/babel-demo.jar
+          fail_on_unmatched_files: true
+          generate_release_notes: true
