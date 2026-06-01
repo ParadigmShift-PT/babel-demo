@@ -42,12 +42,13 @@ java -jar babel-demo.jar nick=alice
 java -jar babel-demo.jar nick=bob          # another terminal or machine
 ```
 
-On the same LAN they discover each other automatically. On the **same machine**,
-give each node a distinct port:
+On the same LAN they discover each other automatically (each node binds the
+auto-detected address of its first reachable interface). On the **same machine**,
+pin both to loopback with `babel.address=127.0.0.1` and give each a distinct port:
 
 ```bash
-java -jar babel-demo.jar nick=alice babel.port=6001
-java -jar babel-demo.jar nick=bob   babel.port=6002 membership.contact=127.0.0.1:6001
+java -jar babel-demo.jar nick=alice babel.address=127.0.0.1 babel.port=6001
+java -jar babel-demo.jar nick=bob   babel.address=127.0.0.1 babel.port=6002 membership.contact=127.0.0.1:6001
 ```
 
 Omit `nick=` and you'll simply be asked for a nickname at startup. Type a line to
@@ -117,9 +118,12 @@ decoupling is the heart of Babel, and the reason these pieces compose cleanly.
 
 **Membership** keeps you connected to the other nodes. It bootstraps using
 Babel's `DiscoverableProtocol`: nodes announce themselves by multicast and the
-runtime introduces them, so no node needs a hard-coded address. Once connected,
-periodic gossip ensures everyone learns about everyone (a *full* membership). It
-emits the shared `NeighborUp` / `NeighborDown` notifications as peers come and go.
+runtime introduces them, so no node needs a hard-coded address. This only happens
+because `babel_config.properties` sets `babel.discovery` to a discovery protocol —
+without that key Babel loads no discovery and nodes connect only via the
+`membership.contact` fallback. Once connected, periodic gossip ensures everyone
+learns about everyone (a *full* membership). It emits the shared `NeighborUp` /
+`NeighborDown` notifications as peers come and go.
 
 The cross-protocol events (`BroadcastRequest`, `BroadcastDelivery`, `NeighborUp`,
 `NeighborDown`, `ChannelAvailableNotification`) are the reusable abstractions from
@@ -150,7 +154,9 @@ arguments (arguments win).
 |---|---|---|
 | `nick` | *(prompted)* | your chat nickname; if omitted, you're asked for one at startup (must be passed when there's no interactive terminal) |
 | `babel.port` | `6000` | TCP port for this node — use a distinct one per node on a machine |
-| `babel.interface` | *(unset)* | network interface (e.g. `en0`, `eth0`) to bind/announce on; needed so LAN discovery advertises a reachable address |
+| `babel.interface` | *(unset)* | network interface (e.g. `en0`, `eth0`) to bind/announce on; if unset, the first reachable (non-loopback) interface is auto-detected |
+| `babel.address` | *(auto-detected)* | bind/announce IP; overrides interface auto-detection. Use `127.0.0.1` to run several nodes on one disconnected machine. There is **no** loopback default — if no interface can be auto-detected you must set this or `babel.interface` |
+| `babel.discovery` | `…discovery.MulticastDiscoveryProtocol` | discovery protocol class(es) (`;`-separated) enabling LAN auto-discovery; **required** for discovery to run at all — remove it and nodes connect only via `membership.contact` |
 | `membership.contact` | `none` | bootstrap: `none` = first node · `host:port` = seed from that node · *(absent)* = wait for discovery |
 | `membership.sampletime` | `2000` | ms between gossip samples |
 | `membership.samplesize` | `6` | max peers per gossip sample |
@@ -177,10 +183,12 @@ running the chat needs to be on the network with the other nodes.
 
 ## Running across machines & the contact fallback
 
-- **Same LAN (recommended):** just run each node with a `nick` (and a
-  `babel.interface=` if a node has several). Multicast discovery connects them.
-- **Same machine:** multicast may not loop back between local JVMs — give each
-  node a distinct `babel.port` and point later nodes at the first with
+- **Same LAN (recommended):** just run each node with a `nick`. Each node
+  auto-detects a reachable interface; pass `babel.interface=` (or `babel.address=`)
+  only if a node has several and picks the wrong one. Multicast discovery connects them.
+- **Same machine:** multicast may not loop back between local JVMs — pin every
+  node to loopback with `babel.address=127.0.0.1`, give each a distinct
+  `babel.port`, and point later nodes at the first with
   `membership.contact=127.0.0.1:<first-port>`.
 - **Segmented networks / VPN / cloud:** where multicast is blocked, start one
   node as `membership.contact=none` and seed the others with
@@ -194,7 +202,7 @@ running the chat needs to be on the network with the other nodes.
 ```
 src/main/java/
 ├── Main.java                                       boot Babel, wire the 3 protocols
-├── utils/InterfaceToIp.java                        resolve an interface name → IP
+├── utils/InterfaceToIp.java                        resolve the bind address (interface / auto-detect)
 ├── protocols/membership/
 │   ├── full/GossipBasedFullMembership.java         membership (extends DiscoverableProtocol)
 │   ├── full/messages/MembershipSampleMessage.java            gossip sample
@@ -224,9 +232,14 @@ Logs go to a **file**, not the console, so they never disturb the chat UI. Each
 node writes `babel-demo-<port>.log`. Watch one with `tail -f babel-demo-6001.log`
 to see membership converge and messages flow.
 
-- **Nodes don't find each other on a LAN:** pass `babel.interface=<your-nic>` so the
+- **Nodes don't find each other on a LAN:** the auto-detected interface may be the
+  wrong one — pass `babel.interface=<your-nic>` (or `babel.address=<ip>`) so the
   announced address is reachable, or use the `membership.contact=` fallback.
-- **Two local nodes:** they must use different `babel.port` values.
+- **"Could not auto-detect a reachable network interface":** the machine has no
+  non-loopback interface up (e.g. offline). Pass `babel.address=127.0.0.1` (or a
+  `babel.interface=`) explicitly.
+- **Two local nodes:** pin both to `babel.address=127.0.0.1` and use different
+  `babel.port` values.
 
 ---
 

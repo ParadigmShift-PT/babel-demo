@@ -1,4 +1,5 @@
 import java.net.InetAddress;
+import java.security.InvalidParameterException;
 import java.util.Properties;
 
 import org.apache.logging.log4j.LogManager;
@@ -25,7 +26,7 @@ import utils.InterfaceToIp;
  * </ol>
  *
  * <p>Launch: {@code java -jar babel-demo.jar nick=<name> [babel.port=<port>]
- * [interface=<nic>] [contact=<host>:<port>]}
+ * [babel.interface=<nic>] [babel.address=<ip>] [membership.contact=<host>:<port>]}
  */
 public class Main {
 
@@ -42,7 +43,11 @@ public class Main {
     // Convention: a PAR_* key constant per parameter (plus a PAR_DEFAULT_* where one
     // applies); the Javadoc on each is the user-facing description. Parameters
     // consumed by the protocols are declared on those protocols' classes instead
-    // (e.g. GossipBasedFullMembership.PAR_CONTACT, InterfaceToIp.PAR_INTERFACE).
+    // (e.g. GossipBasedFullMembership.PAR_CONTACT). The process-wide bind keys
+    // (babel.address / babel.interface / babel.port) are owned by babel-core
+    // (Babel.PAR_DEFAULT_ADDRESS / *_INTERFACE / *_PORT) — we reference those rather
+    // than re-declaring the literals. Address/interface resolution lives in
+    // InterfaceToIp.
 
     /**
      * Your chat nickname — how you appear to everyone else. No default: if it is
@@ -53,26 +58,25 @@ public class Main {
     public static final String PAR_NICK = "nick";
 
     /**
-     * TCP port this node binds and listens on. Run several nodes on one machine by
-     * giving each a distinct port; across machines the same port is fine.
+     * Default value for the TCP port ({@link Babel#PAR_DEFAULT_PORT}, i.e.
+     * {@code babel.port}) this node binds and listens on. Run several nodes on one
+     * machine by giving each a distinct port; across machines the same port is
+     * fine. babel-core owns the key but defines no default value, so the demo
+     * supplies one here.
      */
-    public static final String PAR_BABEL_PORT = "babel.port";
-    /** Default for {@link #PAR_BABEL_PORT}. */
     public static final String PAR_DEFAULT_BABEL_PORT = "6000";
 
-    // The bind address key (`babel.address`) is owned by InterfaceToIp.PAR_ADDRESS:
-    // normally left unset and derived from `babel.interface`, or set explicitly to
-    // override. Here we only hold its default (loopback — fine for several nodes on
-    // one machine).
-    /** Default for {@link InterfaceToIp#PAR_ADDRESS}: loopback. */
-    public static final String PAR_DEFAULT_BABEL_ADDRESS = "127.0.0.1";
+    // The bind address (`babel.address`, Babel.PAR_DEFAULT_ADDRESS) has no static
+    // default: InterfaceToIp.resolveBindAddress derives a reachable IP (from an
+    // explicit babel.address, else babel.interface, else auto-detection) and never
+    // falls back to loopback silently — see that class.
 
     public static void main(String[] args) throws Exception {
 
         // Give each node its own log file (so two nodes on one machine don't write
         // to the same file). This must happen BEFORE any logger is created, since
         // log4j reads the filename when it first initialises.
-        String port = argValue(args, PAR_BABEL_PORT, PAR_DEFAULT_BABEL_PORT);
+        String port = argValue(args, Babel.PAR_DEFAULT_PORT, PAR_DEFAULT_BABEL_PORT);
         System.setProperty("babeldemo.logfile", "babel-demo-" + port + ".log");
 
         Logger logger = LogManager.getLogger(Main.class);
@@ -98,21 +102,31 @@ public class Main {
             System.err.println("  babel.port=<port>            TCP port for this node (use a distinct");
             System.err.println("                               port per instance on the same machine)");
             System.err.println("  babel.interface=<nic>        network interface to bind/announce on");
-            System.err.println("                               (e.g. en0 / eth0); needed for LAN discovery");
+            System.err.println("                               (e.g. en0 / eth0); auto-detected if omitted");
+            System.err.println("  babel.address=<ip>           bind address override (e.g. 127.0.0.1 to run");
+            System.err.println("                               several nodes on one disconnected machine)");
             System.err.println("  membership.contact=<h>:<p>   seed peer if multicast discovery is");
             System.err.println("                               unavailable; 'none' = I am the first node");
             System.exit(1);
         }
 
-        // If babel.interface was given, resolve it to a concrete IPv4 address
-        // (stored under babel.address) so discovery announces something reachable
-        // rather than localhost.
-        InterfaceToIp.addInterfaceIp(props);
+        // Resolve a reachable bind address into babel.address: an explicit
+        // babel.address wins, else resolve babel.interface, else auto-detect the
+        // first non-loopback interface. We never default to loopback silently —
+        // discovery and peers need a reachable address. If nothing qualifies, tell
+        // the operator to pass babel.interface or babel.address and exit cleanly.
+        try {
+            InterfaceToIp.resolveBindAddress(props);
+        } catch (InvalidParameterException e) {
+            System.err.println("babel-demo — cannot determine a bind address.\n");
+            System.err.println(e.getMessage());
+            System.exit(1);
+        }
 
         // Work out our own address/port. A Host is an (address, port) pair that
         // Babel uses everywhere; it has value equality and a built-in serializer.
-        String bindAddress = props.getProperty(InterfaceToIp.PAR_ADDRESS, PAR_DEFAULT_BABEL_ADDRESS);
-        int bindPort = Integer.parseInt(props.getProperty(PAR_BABEL_PORT, PAR_DEFAULT_BABEL_PORT));
+        String bindAddress = props.getProperty(Babel.PAR_DEFAULT_ADDRESS);
+        int bindPort = Integer.parseInt(props.getProperty(Babel.PAR_DEFAULT_PORT, PAR_DEFAULT_BABEL_PORT));
         Host myself = new Host(InetAddress.getByName(bindAddress), bindPort);
 
         logger.info("babel-demo starting — nick='{}', host={}", nick, myself);
